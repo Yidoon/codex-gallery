@@ -162,6 +162,25 @@ pnpm tauri:build:dmg
 
 DMG packaging may depend on your local macOS packaging environment, code signing, and notarization setup.
 
+## Release Workflow
+
+GitHub Actions builds macOS DMG releases from version tags only. Pushes to `main` do not publish a release.
+
+Before creating a release tag, make sure these versions match:
+
+- `package.json`
+- `src-tauri/tauri.conf.json`
+- `src-tauri/Cargo.toml`
+
+Create and push a release tag:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow verifies the frontend and Rust backend, then uploads Apple Silicon and Intel macOS DMG assets to the GitHub Release. Current builds are not notarized yet, so macOS may show an unidentified developer warning.
+
 ## Project Structure
 
 ```text

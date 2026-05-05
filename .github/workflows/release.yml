@@ -1,0 +1,129 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate release version
+        run: |
+          set -euo pipefail
+
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="$(node -p "require('./package.json').version")"
+          tauri_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)"
+
+          echo "Tag version:     ${tag_version}"
+          echo "package.json:    ${package_version}"
+          echo "tauri.conf.json: ${tauri_version}"
+          echo "Cargo.toml:      ${cargo_version}"
+
+          if [ "${package_version}" != "${tag_version}" ] || \
+             [ "${tauri_version}" != "${tag_version}" ] || \
+             [ "${cargo_version}" != "${tag_version}" ]; then
+            echo "Release tag must match package.json, src-tauri/tauri.conf.json, and src-tauri/Cargo.toml versions."
+            exit 1
+          fi
+
+      - name: Lint frontend
+        run: pnpm lint
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Test Rust backend
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Lint Rust backend
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+  build:
+    name: Build macOS ${{ matrix.arch }}
+    needs: verify
+    runs-on: macos-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: apple-silicon
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin --bundles dmg
+          - arch: intel
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin --bundles dmg
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and publish macOS app
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Codex Gallery ${{ github.ref_name }}
+          releaseBody: |
+            Codex Gallery ${{ github.ref_name }}
+
+            This release contains macOS DMG builds for Apple Silicon and Intel Macs.
+
+            Note: this build is not notarized yet, so macOS may show an unidentified developer warning.
+          generateReleaseNotes: true
+          releaseDraft: false
+          prerelease: false
+          tauriScript: pnpm tauri
+          args: ${{ matrix.args }}
+          releaseAssetNamePattern: "Codex-Gallery_[version]_[arch][ext]"

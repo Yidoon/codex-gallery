@@ -2,6 +2,7 @@
   "name": "codex-gallery",
   "private": true,
   "version": "0.1.0",
+  "packageManager": "pnpm@10.33.0",
   "license": "MIT",
   "author": "Yidoon",
   "repository": {

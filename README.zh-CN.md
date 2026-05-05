@@ -164,6 +164,25 @@ pnpm tauri:build:dmg
 
 DMG 打包可能依赖本地 macOS 打包环境、签名和 notarization 设置。
 
+## Release 工作流
+
+GitHub Actions 只会在推送版本 tag 时构建 macOS DMG Release。普通 `main` 分支更新不会发布 Release。
+
+创建 Release tag 之前，需要确认这些版本号一致：
+
+- `package.json`
+- `src-tauri/tauri.conf.json`
+- `src-tauri/Cargo.toml`
+
+创建并推送版本 tag：
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+workflow 会先检查前端和 Rust 后端，然后把 Apple Silicon 和 Intel 两个 macOS DMG 上传到 GitHub Release。当前构建还没有 notarization，所以 macOS 可能会显示 unidentified developer 警告。
+
 ## 项目结构
 
 ```text

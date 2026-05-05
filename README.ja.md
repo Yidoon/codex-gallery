@@ -162,6 +162,25 @@ pnpm tauri:build:dmg
 
 DMG の作成は、ローカルの macOS パッケージング環境、コード署名、notarization の設定に依存する場合があります。
 
+## Release ワークフロー
+
+GitHub Actions はバージョン tag が push されたときだけ macOS DMG Release をビルドします。`main` ブランチへの通常の push では Release は公開されません。
+
+Release tag を作成する前に、次のバージョンが一致していることを確認してください。
+
+- `package.json`
+- `src-tauri/tauri.conf.json`
+- `src-tauri/Cargo.toml`
+
+バージョン tag を作成して push します。
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+workflow はフロントエンドと Rust バックエンドを検証したあと、Apple Silicon と Intel 用の macOS DMG を GitHub Release にアップロードします。現在のビルドはまだ notarization されていないため、macOS で unidentified developer の警告が表示される場合があります。
+
 ## プロジェクト構成
 
 ```text
