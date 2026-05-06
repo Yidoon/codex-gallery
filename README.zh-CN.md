@@ -177,8 +177,8 @@ GitHub Actions 只会在推送版本 tag 时构建 macOS DMG Release。普通 `m
 创建并推送版本 tag：
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
 workflow 会先检查前端和 Rust 后端，然后把 Apple Silicon 和 Intel 两个 macOS DMG 上传到 GitHub Release。当前构建还没有 notarization，所以 macOS 可能会显示 unidentified developer 警告。

@@ -175,8 +175,8 @@ Before creating a release tag, make sure these versions match:
 Create and push a release tag:
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
 The workflow verifies the frontend and Rust backend, then uploads Apple Silicon and Intel macOS DMG assets to the GitHub Release. Current builds are not notarized yet, so macOS may show an unidentified developer warning.
