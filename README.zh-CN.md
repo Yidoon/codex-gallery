@@ -183,6 +183,18 @@ git push origin v1.0.0
 
 workflow 会先检查前端和 Rust 后端，然后把 Apple Silicon 和 Intel 两个 macOS DMG 上传到 GitHub Release。当前构建还没有 notarization，所以 macOS 可能会显示 unidentified developer 警告。
 
+## macOS Gatekeeper
+
+Codex Gallery 当前的 Release 还没有签名，也没有 notarization。下载 DMG 后，macOS 可能会提示“Codex Gallery 已损坏，无法打开”。
+
+如果遇到这个提示，先把 App 拖到 Applications，然后移除 quarantine 属性：
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/Codex Gallery.app"
+```
+
+然后再从 Applications 打开 Codex Gallery。
+
 ## 项目结构
 
 ```text
