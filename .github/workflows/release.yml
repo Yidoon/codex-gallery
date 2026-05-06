@@ -116,7 +116,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build and publish macOS app
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -133,4 +133,4 @@ jobs:
           prerelease: false
           tauriScript: pnpm tauri
           args: ${{ matrix.args }}
-          releaseAssetNamePattern: "Codex-Gallery_[version]_[arch][ext]"
+          assetNamePattern: "Codex-Gallery_[version]_[arch][ext]"
