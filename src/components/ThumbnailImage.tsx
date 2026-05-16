@@ -5,6 +5,9 @@ import type { ImageInfo } from '../types'
 const transparentPixel =
   'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=='
 
+const maxThumbnailCacheItems = 300
+const thumbnailCache = new Map<string, string>()
+
 type ThumbnailState =
   | { key: string; status: 'idle' | 'loading' | 'error'; src: '' }
   | { key: string; status: 'loaded'; src: string }
@@ -13,16 +16,18 @@ export function ThumbnailImage(props: {
   image: ImageInfo
   alt: string
   className?: string
+  codexRoot?: string
   eager?: boolean
   onError?: (message: string) => void
 }) {
-  const { alt, className, eager = false, image, onError } = props
+  const { alt, className, codexRoot, eager = false, image, onError } = props
   const imageRef = useRef<HTMLImageElement | null>(null)
   const [shouldLoad, setShouldLoad] = useState(eager)
-  const [thumbnail, setThumbnail] = useState<ThumbnailState>({
-    key: image.thumbnailKey,
-    status: 'idle',
-    src: '',
+  const [thumbnail, setThumbnail] = useState<ThumbnailState>(() => {
+    const cached = cachedThumbnail(image.thumbnailKey)
+    return cached
+      ? { key: image.thumbnailKey, status: 'loaded', src: cached }
+      : { key: image.thumbnailKey, status: 'idle', src: '' }
   })
 
   useEffect(() => {
@@ -57,10 +62,20 @@ export function ThumbnailImage(props: {
 
     let cancelled = false
     const key = image.thumbnailKey
+    const cached = cachedThumbnail(key)
+    if (cached) {
+      void Promise.resolve().then(() => {
+        if (!cancelled) {
+          setThumbnail({ key, status: 'loaded', src: cached })
+        }
+      })
+      return
+    }
 
-    void readThumbnailDataUrl(image.path)
+    void readThumbnailDataUrl(image.path, codexRoot)
       .then((src) => {
         if (!cancelled) {
+          cacheThumbnail(key, src)
           setThumbnail({ key, status: 'loaded', src })
         }
       })
@@ -74,7 +89,7 @@ export function ThumbnailImage(props: {
     return () => {
       cancelled = true
     }
-  }, [shouldLoad, image.path, image.thumbnailKey, onError])
+  }, [shouldLoad, image.path, image.thumbnailKey, codexRoot, onError])
 
   const sameKey = thumbnail.key === image.thumbnailKey
   const loaded = sameKey && thumbnail.status === 'loaded'
@@ -96,6 +111,28 @@ export function ThumbnailImage(props: {
       loading={eager ? 'eager' : 'lazy'}
     />
   )
+}
+
+function cachedThumbnail(key: string) {
+  const cached = thumbnailCache.get(key)
+  if (!cached) {
+    return undefined
+  }
+  thumbnailCache.delete(key)
+  thumbnailCache.set(key, cached)
+  return cached
+}
+
+function cacheThumbnail(key: string, src: string) {
+  thumbnailCache.delete(key)
+  thumbnailCache.set(key, src)
+  while (thumbnailCache.size > maxThumbnailCacheItems) {
+    const oldestKey = thumbnailCache.keys().next().value
+    if (!oldestKey) {
+      break
+    }
+    thumbnailCache.delete(oldestKey)
+  }
 }
 
 function errorMessage(error: unknown) {

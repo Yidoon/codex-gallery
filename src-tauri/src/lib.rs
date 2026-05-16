@@ -38,6 +38,7 @@ struct GalleryPayload {
     state_db_exists: bool,
     images: Vec<ImageInfo>,
     sessions: Vec<SessionInfo>,
+    tags: Vec<TagInfo>,
     favorite_paths: Vec<String>,
     warnings: Vec<String>,
 }
@@ -73,7 +74,25 @@ struct ImageInfo {
     format: String,
     favorited: bool,
     missing_session: bool,
+    tags: Vec<String>,
     thumbnail_key: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TagInfo {
+    id: i64,
+    name: String,
+    image_count: usize,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+}
+
+#[derive(Debug, Default)]
+struct AppMetadata {
+    favorites: HashSet<String>,
+    tags: Vec<TagInfo>,
+    image_tags: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -83,6 +102,7 @@ struct ExportRequest {
     target_dir: String,
     naming: String,
     custom_prefix: Option<String>,
+    codex_root: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -109,8 +129,8 @@ fn scan_gallery_blocking(
     let images_root = codex_root.join("generated_images");
     let state_db = codex_root.join("state_5.sqlite");
     let mut warnings = Vec::new();
-    let favorites = load_favorites(&app)?;
-    let mut favorite_paths: Vec<String> = favorites.iter().cloned().collect();
+    let mut app_metadata = load_app_metadata(&app)?;
+    let mut favorite_paths: Vec<String> = app_metadata.favorites.iter().cloned().collect();
     favorite_paths.sort();
 
     let codex_exists = codex_root.exists();
@@ -176,7 +196,8 @@ fn scan_gallery_blocking(
                     &session_id,
                     &session_title,
                     !session_map.contains_key(&session_id),
-                    &favorites,
+                    &app_metadata.favorites,
+                    &app_metadata.image_tags,
                 ) {
                     images.push(info);
                 }
@@ -197,6 +218,7 @@ fn scan_gallery_blocking(
 
     images.sort_by_key(|image| Reverse(image.modified_at_ms));
     sessions.sort_by_key(|session| Reverse(session.updated_at_ms));
+    update_tag_counts(&mut app_metadata.tags, &images);
 
     Ok(GalleryPayload {
         codex_root: path_to_string(&codex_root),
@@ -206,14 +228,22 @@ fn scan_gallery_blocking(
         state_db_exists,
         images,
         sessions,
+        tags: app_metadata.tags,
         favorite_paths,
         warnings,
     })
 }
 
 #[tauri::command]
-fn toggle_favorite(app: AppHandle, path: String) -> Result<bool, String> {
-    let path = path_to_string(&validate_default_codex_image_path(Path::new(&path))?);
+fn toggle_favorite(
+    app: AppHandle,
+    path: String,
+    codex_root: Option<String>,
+) -> Result<bool, String> {
+    let path = path_to_string(&validate_codex_image_path_for_root(
+        Path::new(&path),
+        codex_root,
+    )?);
     let connection = app_connection(&app)?;
     init_app_db(&connection)?;
     let exists: Option<String> = connection
@@ -239,6 +269,96 @@ fn toggle_favorite(app: AppHandle, path: String) -> Result<bool, String> {
             .map_err(|error| error.to_string())?;
         Ok(true)
     }
+}
+
+#[tauri::command]
+fn add_image_tag(
+    app: AppHandle,
+    path: String,
+    tag_name: String,
+    codex_root: Option<String>,
+) -> Result<Vec<String>, String> {
+    let path = path_to_string(&validate_codex_image_path_for_root(
+        Path::new(&path),
+        codex_root,
+    )?);
+    let tag_name = normalize_tag_name(&tag_name)?;
+    let connection = app_connection(&app)?;
+    init_app_db(&connection)?;
+    let tag_id = get_or_create_tag(&connection, &tag_name)?;
+    connection
+        .execute(
+            "insert or ignore into image_tags(image_path, tag_id, created_at_ms) values (?1, ?2, ?3)",
+            params![&path, tag_id, now_ms()],
+        )
+        .map_err(|error| error.to_string())?;
+    tags_for_image(&connection, &path)
+}
+
+#[tauri::command]
+fn remove_image_tag(
+    app: AppHandle,
+    path: String,
+    tag_name: String,
+    codex_root: Option<String>,
+) -> Result<Vec<String>, String> {
+    let path = path_to_string(&validate_codex_image_path_for_root(
+        Path::new(&path),
+        codex_root,
+    )?);
+    let tag_name = normalize_tag_name(&tag_name)?;
+    let connection = app_connection(&app)?;
+    init_app_db(&connection)?;
+    connection
+        .execute(
+            "
+            delete from image_tags
+            where image_path = ?1
+              and tag_id in (select id from tags where name = ?2 collate nocase)
+            ",
+            params![&path, &tag_name],
+        )
+        .map_err(|error| error.to_string())?;
+    tags_for_image(&connection, &path)
+}
+
+#[tauri::command]
+fn rename_tag(app: AppHandle, tag_id: i64, name: String) -> Result<(), String> {
+    let name = normalize_tag_name(&name)?;
+    let connection = app_connection(&app)?;
+    init_app_db(&connection)?;
+    let changed = connection
+        .execute(
+            "update tags set name = ?1, updated_at_ms = ?2 where id = ?3",
+            params![&name, now_ms(), tag_id],
+        )
+        .map_err(|error| {
+            if error.to_string().contains("UNIQUE") {
+                "A tag with that name already exists.".to_string()
+            } else {
+                error.to_string()
+            }
+        })?;
+    if changed == 0 {
+        return Err("Tag was not found.".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_tag(app: AppHandle, tag_id: i64) -> Result<(), String> {
+    let connection = app_connection(&app)?;
+    init_app_db(&connection)?;
+    connection
+        .execute("delete from image_tags where tag_id = ?1", params![tag_id])
+        .map_err(|error| error.to_string())?;
+    let changed = connection
+        .execute("delete from tags where id = ?1", params![tag_id])
+        .map_err(|error| error.to_string())?;
+    if changed == 0 {
+        return Err("Tag was not found.".to_string());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -270,10 +390,11 @@ fn export_images_blocking(request: ExportRequest) -> Result<ExportResult, String
         return Err("Export target is not a directory.".to_string());
     }
 
+    let images_root = resolve_codex_root(request.codex_root).join("generated_images");
     let sources = request
         .paths
         .iter()
-        .map(|source| validate_default_codex_image_path(Path::new(source)))
+        .map(|source| validate_codex_image_path(Path::new(source), &images_root))
         .collect::<Result<Vec<_>, _>>()?;
     let total = sources.len();
     let mut exported = Vec::new();
@@ -294,14 +415,17 @@ fn export_images_blocking(request: ExportRequest) -> Result<ExportResult, String
 }
 
 #[tauri::command]
-async fn read_image_data_url(path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || read_image_data_url_blocking(path))
+async fn read_image_data_url(path: String, codex_root: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || read_image_data_url_blocking(path, codex_root))
         .await
         .map_err(|error| error.to_string())?
 }
 
-fn read_image_data_url_blocking(path: String) -> Result<String, String> {
-    let path = validate_default_codex_image_path(Path::new(&path))?;
+fn read_image_data_url_blocking(
+    path: String,
+    codex_root: Option<String>,
+) -> Result<String, String> {
+    let path = validate_codex_image_path_for_root(Path::new(&path), codex_root)?;
     let bytes = fs::read(&path).map_err(|error| error.to_string())?;
     let mime = mime_for_path(&path);
     Ok(format!(
@@ -311,9 +435,13 @@ fn read_image_data_url_blocking(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn read_thumbnail_data_url(app: AppHandle, path: String) -> Result<String, String> {
+async fn read_thumbnail_data_url(
+    app: AppHandle,
+    path: String,
+    codex_root: Option<String>,
+) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let path = validate_default_codex_image_path(Path::new(&path))?;
+        let path = validate_codex_image_path_for_root(Path::new(&path), codex_root)?;
         let metadata = fs::metadata(&path).map_err(|error| error.to_string())?;
         thumbnail_data_url(&app, &path, &metadata)
             .ok_or_else(|| "Could not create thumbnail.".to_string())
@@ -323,8 +451,8 @@ async fn read_thumbnail_data_url(app: AppHandle, path: String) -> Result<String,
 }
 
 #[tauri::command]
-fn reveal_path(path: String) -> Result<(), String> {
-    let path = validate_default_codex_image_path(Path::new(&path))?;
+fn reveal_path(path: String, codex_root: Option<String>) -> Result<(), String> {
+    let path = validate_codex_image_path_for_root(Path::new(&path), codex_root)?;
 
     #[cfg(target_os = "macos")]
     {
@@ -498,6 +626,7 @@ fn build_image_info(
     session_title: &str,
     missing_session: bool,
     favorites: &HashSet<String>,
+    image_tags: &HashMap<String, Vec<String>>,
 ) -> Option<ImageInfo> {
     let path = validate_codex_image_path(path, images_root).ok()?;
     let metadata = fs::metadata(&path).ok()?;
@@ -527,6 +656,7 @@ fn build_image_info(
         format: extension.to_uppercase(),
         favorited: favorites.contains(&path_string),
         missing_session,
+        tags: image_tags.get(&path_string).cloned().unwrap_or_default(),
         thumbnail_key,
     })
 }
@@ -542,8 +672,11 @@ fn is_supported_image(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn validate_default_codex_image_path(path: &Path) -> Result<PathBuf, String> {
-    let images_root = resolve_codex_root(None).join("generated_images");
+fn validate_codex_image_path_for_root(
+    path: &Path,
+    codex_root: Option<String>,
+) -> Result<PathBuf, String> {
+    let images_root = resolve_codex_root(codex_root).join("generated_images");
     validate_codex_image_path(path, &images_root)
 }
 
@@ -647,9 +780,17 @@ fn missing_session(session_id: &str) -> SessionInfo {
     }
 }
 
-fn load_favorites(app: &AppHandle) -> Result<HashSet<String>, String> {
+fn load_app_metadata(app: &AppHandle) -> Result<AppMetadata, String> {
     let connection = app_connection(app)?;
     init_app_db(&connection)?;
+    Ok(AppMetadata {
+        favorites: load_favorites(&connection)?,
+        tags: load_tags(&connection)?,
+        image_tags: load_image_tags(&connection)?,
+    })
+}
+
+fn load_favorites(connection: &Connection) -> Result<HashSet<String>, String> {
     let mut statement = connection
         .prepare("select path from favorites")
         .map_err(|error| error.to_string())?;
@@ -662,6 +803,120 @@ fn load_favorites(app: &AppHandle) -> Result<HashSet<String>, String> {
         favorites.insert(row.map_err(|error| error.to_string())?);
     }
     Ok(favorites)
+}
+
+fn load_tags(connection: &Connection) -> Result<Vec<TagInfo>, String> {
+    let mut statement = connection
+        .prepare("select id, name, created_at_ms, updated_at_ms from tags order by lower(name)")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(TagInfo {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                image_count: 0,
+                created_at_ms: row.get(2)?,
+                updated_at_ms: row.get(3)?,
+            })
+        })
+        .map_err(|error| error.to_string())?;
+
+    let mut tags = Vec::new();
+    for row in rows {
+        tags.push(row.map_err(|error| error.to_string())?);
+    }
+    Ok(tags)
+}
+
+fn load_image_tags(connection: &Connection) -> Result<HashMap<String, Vec<String>>, String> {
+    let mut statement = connection
+        .prepare(
+            "
+            select image_tags.image_path, tags.name
+            from image_tags
+            join tags on tags.id = image_tags.tag_id
+            order by lower(tags.name)
+            ",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| error.to_string())?;
+
+    let mut image_tags: HashMap<String, Vec<String>> = HashMap::new();
+    for row in rows {
+        let (path, tag_name) = row.map_err(|error| error.to_string())?;
+        image_tags.entry(path).or_default().push(tag_name);
+    }
+    Ok(image_tags)
+}
+
+fn update_tag_counts(tags: &mut [TagInfo], images: &[ImageInfo]) {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for image in images {
+        for tag in &image.tags {
+            *counts.entry(tag.to_lowercase()).or_insert(0) += 1;
+        }
+    }
+    for tag in tags {
+        tag.image_count = counts.get(&tag.name.to_lowercase()).copied().unwrap_or(0);
+    }
+}
+
+fn get_or_create_tag(connection: &Connection, name: &str) -> Result<i64, String> {
+    connection
+        .execute(
+            "insert or ignore into tags(name, created_at_ms, updated_at_ms) values (?1, ?2, ?2)",
+            params![name, now_ms()],
+        )
+        .map_err(|error| error.to_string())?;
+
+    connection
+        .query_row(
+            "select id from tags where name = ?1 collate nocase",
+            params![name],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn tags_for_image(connection: &Connection, path: &str) -> Result<Vec<String>, String> {
+    let mut statement = connection
+        .prepare(
+            "
+            select tags.name
+            from image_tags
+            join tags on tags.id = image_tags.tag_id
+            where image_tags.image_path = ?1
+            order by lower(tags.name)
+            ",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params![path], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?;
+
+    let mut tags = Vec::new();
+    for row in rows {
+        tags.push(row.map_err(|error| error.to_string())?);
+    }
+    Ok(tags)
+}
+
+fn normalize_tag_name(value: &str) -> Result<String, String> {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.is_empty() {
+        return Err("Tag name cannot be empty.".to_string());
+    }
+    if normalized.chars().any(char::is_control) {
+        return Err("Tag name cannot contain control characters.".to_string());
+    }
+    if normalized.chars().count() > 48 {
+        return Err("Tag name must be 48 characters or fewer.".to_string());
+    }
+    Ok(normalized)
 }
 
 fn app_connection(app: &AppHandle) -> Result<Connection, String> {
@@ -681,6 +936,23 @@ fn init_app_db(connection: &Connection) -> Result<(), String> {
               path text primary key,
               created_at_ms integer not null
             );
+
+            create table if not exists tags (
+              id integer primary key autoincrement,
+              name text not null unique collate nocase,
+              created_at_ms integer not null,
+              updated_at_ms integer not null
+            );
+
+            create table if not exists image_tags (
+              image_path text not null,
+              tag_id integer not null,
+              created_at_ms integer not null,
+              primary key (image_path, tag_id)
+            );
+
+            create index if not exists image_tags_tag_id_idx on image_tags(tag_id);
+            create index if not exists image_tags_image_path_idx on image_tags(image_path);
             ",
         )
         .map_err(|error| error.to_string())
@@ -817,6 +1089,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             scan_gallery,
             toggle_favorite,
+            add_image_tag,
+            remove_image_tag,
+            rename_tag,
+            delete_tag,
             export_images,
             read_image_data_url,
             read_thumbnail_data_url,
@@ -876,7 +1152,10 @@ mod tests {
 
         let validated = validate_codex_image_path(&image, &images_root).expect("validate image");
 
-        assert_eq!(validated, fs::canonicalize(&image).expect("canonical image"));
+        assert_eq!(
+            validated,
+            fs::canonicalize(&image).expect("canonical image")
+        );
         fs::remove_dir_all(directory).expect("remove test directory");
     }
 
@@ -895,6 +1174,20 @@ mod tests {
             "Image is outside the Codex generated_images directory."
         );
         fs::remove_dir_all(directory).expect("remove test directory");
+    }
+
+    #[test]
+    fn normalize_tag_name_trims_and_collapses_spaces() {
+        let name = normalize_tag_name("  app   icon  ").expect("normalize tag");
+
+        assert_eq!(name, "app icon");
+    }
+
+    #[test]
+    fn normalize_tag_name_rejects_empty_names() {
+        let error = normalize_tag_name("   ").expect_err("reject empty tag");
+
+        assert_eq!(error, "Tag name cannot be empty.");
     }
 
     #[test]

@@ -30,6 +30,7 @@ Codex Gallery turns those local images into a simple photo-library style experie
 - **Session titles**: read conversation titles from Codex's local SQLite state when available.
 - **Missing Session**: keep images visible even when the original session metadata is missing.
 - **Favorites**: store favorites in Codex Gallery's own local SQLite database.
+- **Tags**: add tags to images, browse tagged images from the sidebar, and rename or delete tags in a dedicated tag manager.
 - **Large preview**: open a centered large image preview with previous/next navigation.
 - **Metadata**: inspect filename, dimensions, size, format, path, session id, project directory, and modified time.
 - **Export**: copy selected images to Downloads using their original filenames without moving the originals.
@@ -84,6 +85,7 @@ Codex Gallery is local-first.
 - It does not modify `~/.codex`.
 - It opens Codex's `state_5.sqlite` in read-only mode.
 - Favorites are stored in the app's own `codex-gallery.db`.
+- Tags are stored in the app's own `codex-gallery.db`.
 - Thumbnails are generated on demand and cached in the app data directory.
 - Image read, export, and Finder reveal commands are restricted to `~/.codex/generated_images`.
 - Export copies files to Downloads and does not move or delete originals.

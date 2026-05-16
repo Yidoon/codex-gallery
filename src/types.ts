@@ -1,4 +1,4 @@
-export type ViewMode = 'timeline' | 'sessions' | 'favorites' | 'missing'
+export type ViewMode = 'timeline' | 'sessions' | 'favorites' | 'missing' | 'tags'
 
 export interface SessionInfo {
   id: string
@@ -27,7 +27,16 @@ export interface ImageInfo {
   format: string
   favorited: boolean
   missingSession: boolean
+  tags: string[]
   thumbnailKey: string
+}
+
+export interface TagInfo {
+  id: number
+  name: string
+  imageCount: number
+  createdAtMs: number
+  updatedAtMs: number
 }
 
 export interface GalleryPayload {
@@ -38,6 +47,7 @@ export interface GalleryPayload {
   stateDbExists: boolean
   images: ImageInfo[]
   sessions: SessionInfo[]
+  tags: TagInfo[]
   favoritePaths: string[]
   warnings: string[]
 }
@@ -47,6 +57,7 @@ export interface ExportRequest {
   targetDir: string
   naming: string
   customPrefix?: string
+  codexRoot?: string
 }
 
 export interface ExportResult {
