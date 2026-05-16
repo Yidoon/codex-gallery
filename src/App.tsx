@@ -1,20 +1,27 @@
 import {
   AlertCircle,
+  ArrowLeftRight,
+  ArrowUp,
   CalendarDays,
   Check,
   ChevronLeft,
+  Columns2,
   Copy,
   Download,
   FolderOpen,
   Grid3X3,
   ImageOff,
   Info,
+  LayoutGrid,
   Loader2,
   MessagesSquare,
   Pencil,
   Plus,
   RefreshCw,
+  Rows2,
   Star,
+  SquareSplitVertical,
+  SquareStack,
   Tag,
   Tags,
   Trash2,
@@ -42,6 +49,99 @@ import './App.css'
 
 const galleryZoomSizes = [92, 132, 180, 238]
 const sessionZoomSizes = [180, 238, 300, 360]
+const maxCompareImages = 4
+
+type CompareLayout = 'grid' | 'horizontal' | 'vertical' | 'stack'
+
+type StackImageBounds = {
+  left: number
+  top: number
+  width: number
+  height: number
+  right: number
+  bottom: number
+}
+
+type StackImageBoundsState = {
+  pairKey: string
+  bounds: StackImageBounds
+}
+
+type StackPairPaths = {
+  basePath: string | null
+  overlayPath: string | null
+}
+
+type CompareState = {
+  paths: string[]
+  stackPair: StackPairPaths
+  open: boolean
+}
+
+function emptyStackPairPaths(): StackPairPaths {
+  return { basePath: null, overlayPath: null }
+}
+
+function reconcileStackPairPaths(
+  paths: string[],
+  current: StackPairPaths,
+  preferredBasePath?: string,
+  preferredOverlayPath?: string,
+): StackPairPaths {
+  const availablePaths = paths.slice(0, maxCompareImages)
+  if (availablePaths.length < 2) {
+    return emptyStackPairPaths()
+  }
+
+  const fallbackBasePath = availablePaths[0]
+  if (!fallbackBasePath) {
+    return emptyStackPairPaths()
+  }
+
+  const baseCandidate = preferredBasePath ?? current.basePath
+  const basePath =
+    baseCandidate && availablePaths.includes(baseCandidate) ? baseCandidate : fallbackBasePath
+  const overlayCandidate = preferredOverlayPath ?? current.overlayPath
+  const overlayPath =
+    overlayCandidate &&
+    overlayCandidate !== basePath &&
+    availablePaths.includes(overlayCandidate)
+      ? overlayCandidate
+      : availablePaths.find((path) => path !== basePath) ?? null
+
+  return { basePath, overlayPath }
+}
+
+function stackPairPathsEqual(first: StackPairPaths, second: StackPairPaths) {
+  return first.basePath === second.basePath && first.overlayPath === second.overlayPath
+}
+
+function comparePathListsEqual(first: string[], second: string[]) {
+  return first.length === second.length && first.every((path, index) => path === second[index])
+}
+
+function reconcileCompareState(
+  current: CompareState,
+  paths: string[],
+  preferredBasePath?: string,
+  preferredOverlayPath?: string,
+): CompareState {
+  const stackPair = reconcileStackPairPaths(
+    paths,
+    current.stackPair,
+    preferredBasePath,
+    preferredOverlayPath,
+  )
+  const open = paths.length > 0 ? current.open : false
+  if (
+    comparePathListsEqual(current.paths, paths) &&
+    stackPairPathsEqual(current.stackPair, stackPair) &&
+    current.open === open
+  ) {
+    return current
+  }
+  return { paths, stackPair, open }
+}
 
 function App() {
   const [gallery, setGallery] = useState<GalleryPayload | null>(null)
@@ -57,9 +157,19 @@ function App() {
   const [tagImage, setTagImage] = useState<ImageInfo | null>(null)
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set())
   const [selectMode, setSelectMode] = useState(false)
+  const [compareState, setCompareState] = useState<CompareState>({
+    paths: [],
+    stackPair: emptyStackPairPaths(),
+    open: false,
+  })
+  const [compareLayout, setCompareLayout] = useState<CompareLayout>('horizontal')
+  const [compareSlider, setCompareSlider] = useState(50)
   const [tagMutationCount, setTagMutationCount] = useState(0)
   const [toast, setToast] = useState('')
   const loadRequestId = useRef(0)
+  const comparePaths = compareState.paths
+  const stackPairPaths = compareState.stackPair
+  const compareOpen = compareState.open
 
   const showToast = useCallback((message: string) => {
     setToast(message)
@@ -84,6 +194,13 @@ function App() {
         return
       }
       setGallery(payload)
+      const validImagePaths = new Set(payload.images.map((image) => image.path))
+      setCompareState((current) => {
+        const nextPaths = current.paths
+          .filter((path) => validImagePaths.has(path))
+          .slice(0, maxCompareImages)
+        return reconcileCompareState(current, nextPaths)
+      })
     } catch (loadError) {
       if (requestId !== loadRequestId.current) {
         return
@@ -213,6 +330,14 @@ function App() {
       tagImage ? (gallery?.images.find((image) => image.path === tagImage.path) ?? tagImage) : null,
     [gallery, tagImage],
   )
+  const compareImages = useMemo(() => {
+    const imagesByPath = new Map((gallery?.images ?? []).map((image) => [image.path, image]))
+    return comparePaths.flatMap((path) => {
+      const image = imagesByPath.get(path)
+      return image ? [image] : []
+    })
+  }, [comparePaths, gallery])
+  const comparePathSet = useMemo(() => new Set(comparePaths), [comparePaths])
   const currentPreviewIndex = currentPreviewImage
     ? filteredImages.findIndex((image) => image.path === currentPreviewImage.path)
     : -1
@@ -377,6 +502,60 @@ function App() {
     })
   }
 
+  function handleToggleCompare(image: ImageInfo) {
+    if (comparePathSet.has(image.path)) {
+      setCompareState((current) =>
+        reconcileCompareState(
+          current,
+          current.paths.filter((path) => path !== image.path),
+        ),
+      )
+      return
+    }
+
+    if (comparePaths.length >= maxCompareImages) {
+      showToast(`Compare supports up to ${maxCompareImages} images.`)
+      return
+    }
+
+    setCompareState((current) => {
+      if (current.paths.includes(image.path) || current.paths.length >= maxCompareImages) {
+        return current
+      }
+      return reconcileCompareState(current, [...current.paths, image.path])
+    })
+  }
+
+  function removeComparePath(path: string) {
+    setCompareState((current) =>
+      reconcileCompareState(
+        current,
+        current.paths.filter((item) => item !== path),
+      ),
+    )
+  }
+
+  function clearCompareImages() {
+    setCompareState({
+      paths: [],
+      stackPair: emptyStackPairPaths(),
+      open: false,
+    })
+  }
+
+  function handleSetStackBase(path: string) {
+    setCompareState((current) =>
+      reconcileCompareState(current, current.paths, path),
+    )
+    setCompareSlider(50)
+  }
+
+  function handleSwapStackPair(basePath: string, overlayPath: string) {
+    setCompareState((current) =>
+      reconcileCompareState(current, current.paths, overlayPath, basePath),
+    )
+  }
+
   async function handleExport(paths: string[]) {
     if (paths.length === 0) {
       return
@@ -497,10 +676,22 @@ function App() {
 
       <main className="workspace" onWheel={handleWheel}>
         <header className="topbar">
-          <div>
+          <div className="topbar-title">
             <p className="eyebrow">{viewLabel(view, selectedSession, selectedTag)}</p>
             <h1>{selectedSession?.title ?? selectedTag?.name ?? pageTitle(view)}</h1>
           </div>
+
+          <CompareTray
+            images={compareImages}
+            codexRoot={gallery?.codexRoot}
+            onOpen={() =>
+              setCompareState((current) =>
+                current.paths.length > 0 ? { ...current, open: true } : current,
+              )
+            }
+            onRemove={removeComparePath}
+            onClear={clearCompareImages}
+          />
 
           <div className="topbar-actions">
             {imageActionsAvailable ? (
@@ -608,6 +799,7 @@ function App() {
               tileSize={tileSize}
               selectedPaths={selectedPaths}
               selectMode={selectMode}
+              comparePaths={comparePathSet}
               onBackToSessions={() => setSelectedSessionId(null)}
               onBackToTags={() => setSelectedTagId(null)}
               onOpenSession={(sessionId) => {
@@ -628,6 +820,7 @@ function App() {
                 setInfoImage(null)
               }}
               onToggleFavorite={(image) => void handleFavorite(image)}
+              onToggleCompare={handleToggleCompare}
               onToggleSelected={toggleSelected}
             />
           ) : null}
@@ -681,6 +874,26 @@ function App() {
         />
       ) : null}
 
+      {compareOpen && compareImages.length > 0 ? (
+        <CompareModal
+          images={compareImages}
+          codexRoot={gallery?.codexRoot}
+          layout={compareLayout}
+          slider={compareSlider}
+          stackBasePath={stackPairPaths.basePath}
+          stackOverlayPath={stackPairPaths.overlayPath}
+          onClose={() => setCompareState((current) => ({ ...current, open: false }))}
+          onLayoutChange={setCompareLayout}
+          onSliderChange={setCompareSlider}
+          onSetStackBase={handleSetStackBase}
+          onSwapStackPair={handleSwapStackPair}
+          onRemove={removeComparePath}
+          onClear={clearCompareImages}
+          onFavorite={(image) => void handleFavorite(image)}
+          onError={showToast}
+        />
+      ) : null}
+
       {toast ? <div className="toast">{toast}</div> : null}
     </div>
   )
@@ -701,6 +914,7 @@ function GalleryContent(props: {
   tileSize: number
   selectedPaths: Set<string>
   selectMode: boolean
+  comparePaths: Set<string>
   onBackToSessions: () => void
   onBackToTags: () => void
   onOpenSession: (sessionId: string) => void
@@ -712,6 +926,7 @@ function GalleryContent(props: {
   onShowInfo: (image: ImageInfo) => void
   onEditTags: (image: ImageInfo) => void
   onToggleFavorite: (image: ImageInfo) => void
+  onToggleCompare: (image: ImageInfo) => void
   onToggleSelected: (path: string) => void
 }) {
   const {
@@ -1092,10 +1307,12 @@ function ImageGrid(props: {
   codexRoot?: string
   selectedPaths: Set<string>
   selectMode: boolean
+  comparePaths: Set<string>
   onOpenPreview: (image: ImageInfo) => void
   onShowInfo: (image: ImageInfo) => void
   onEditTags: (image: ImageInfo) => void
   onToggleFavorite: (image: ImageInfo) => void
+  onToggleCompare: (image: ImageInfo) => void
   onToggleSelected: (path: string) => void
 }) {
   return (
@@ -1115,17 +1332,24 @@ function ImageTile(props: {
   codexRoot?: string
   selectedPaths: Set<string>
   selectMode: boolean
+  comparePaths: Set<string>
   onOpenPreview: (image: ImageInfo) => void
   onShowInfo: (image: ImageInfo) => void
   onEditTags: (image: ImageInfo) => void
   onToggleFavorite: (image: ImageInfo) => void
+  onToggleCompare: (image: ImageInfo) => void
   onToggleSelected: (path: string) => void
 }) {
-  const { image, selectedPaths, selectMode } = props
+  const { comparePaths, image, selectedPaths, selectMode } = props
   const selected = selectedPaths.has(image.path)
+  const compared = comparePaths.has(image.path)
 
   return (
-    <article className={`image-tile ${selected ? 'selected' : ''} ${selectMode ? 'selecting' : ''}`}>
+    <article
+      className={`image-tile ${selected ? 'selected' : ''} ${compared ? 'compared' : ''} ${
+        selectMode ? 'selecting' : ''
+      }`}
+    >
       <button
         type="button"
         className="thumbnail-button"
@@ -1153,6 +1377,15 @@ function ImageTile(props: {
           aria-label={image.favorited ? 'Remove from favorites' : 'Add to favorites'}
         >
           <Star size={16} fill={image.favorited ? 'currentColor' : 'none'} />
+        </button>
+        <button
+          type="button"
+          className={`round-action ${compared ? 'compared' : ''}`}
+          onClick={() => props.onToggleCompare(image)}
+          title={compared ? 'Remove from compare' : 'Compare image'}
+          aria-label={compared ? 'Remove from compare' : 'Compare image'}
+        >
+          <SquareSplitVertical size={16} />
         </button>
         <button
           type="button"
@@ -1184,6 +1417,654 @@ function ImageTile(props: {
       </div>
     </article>
   )
+}
+
+function CompareTray(props: {
+  images: ImageInfo[]
+  codexRoot?: string
+  onOpen: () => void
+  onRemove: (path: string) => void
+  onClear: () => void
+}) {
+  const [clearActionVisible, setClearActionVisible] = useState(false)
+  const actionClusterRef = useRef<HTMLDivElement | null>(null)
+
+  if (props.images.length === 0) {
+    return null
+  }
+
+  function hideClearActionWhenUnfocused() {
+    if (!actionClusterRef.current?.contains(document.activeElement)) {
+      setClearActionVisible(false)
+    }
+  }
+
+  return (
+    <section className="compare-tray" aria-label="Compare images">
+      <div className="compare-tray-thumbs">
+        {props.images.map((image) => (
+          <div className="compare-tray-thumb" key={image.path}>
+            <button
+              type="button"
+              className="compare-thumb-button"
+              title={image.filename}
+              aria-label={`Open compare from ${image.filename}`}
+              onClick={props.onOpen}
+            >
+              <ThumbnailImage image={image} alt="" codexRoot={props.codexRoot} eager />
+            </button>
+            <button
+              type="button"
+              className="compare-thumb-remove"
+              title="Remove from compare"
+              aria-label={`Remove ${image.filename} from compare`}
+              onClick={() => props.onRemove(image.path)}
+            >
+              <X size={15} aria-hidden="true" />
+            </button>
+          </div>
+        ))}
+      </div>
+      <div
+        ref={actionClusterRef}
+        className={`compare-action-cluster ${clearActionVisible ? 'expanded' : ''}`}
+        onPointerEnter={() => setClearActionVisible(true)}
+        onPointerLeave={hideClearActionWhenUnfocused}
+        onFocus={() => setClearActionVisible(true)}
+        onBlur={(event) => {
+          const nextFocusedElement = event.relatedTarget instanceof Node ? event.relatedTarget : null
+          if (!event.currentTarget.contains(nextFocusedElement)) {
+            setClearActionVisible(false)
+          }
+        }}
+      >
+        <button
+          type="button"
+          className="compare-open-button"
+          title="Open compare"
+          aria-label={`Open compare with ${props.images.length} images`}
+          onClick={props.onOpen}
+        >
+          <SquareSplitVertical size={16} aria-hidden="true" />
+          <span>Compare</span>
+        </button>
+        <button
+          type="button"
+          className="compare-clear-button"
+          title="Clear compare"
+          aria-label="Clear all compare images"
+          aria-hidden={!clearActionVisible}
+          tabIndex={clearActionVisible ? 0 : -1}
+          onClick={props.onClear}
+        >
+          <Trash2 size={15} aria-hidden="true" />
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function CompareModal(props: {
+  images: ImageInfo[]
+  codexRoot?: string
+  layout: CompareLayout
+  slider: number
+  stackBasePath: string | null
+  stackOverlayPath: string | null
+  onClose: () => void
+  onLayoutChange: (layout: CompareLayout) => void
+  onSliderChange: (value: number) => void
+  onSetStackBase: (path: string) => void
+  onSwapStackPair: (basePath: string, overlayPath: string) => void
+  onRemove: (path: string) => void
+  onClear: () => void
+  onFavorite: (image: ImageInfo) => void
+  onError: (message: string) => void
+}) {
+  const stackAvailable = props.images.length >= 2
+  const gridAvailable = props.images.length >= 3
+  const activeLayout =
+    !stackAvailable
+      ? 'horizontal'
+      : props.layout === 'grid' && !gridAvailable
+        ? 'horizontal'
+        : props.layout
+  const countStyle = { '--compare-count': props.images.length } as React.CSSProperties
+  const onClose = props.onClose
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose()
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
+  return (
+    <div className="compare-backdrop" role="dialog" aria-modal="true">
+      <div className="compare-toolbar">
+        <div className="compare-title">
+          <p className="eyebrow">Compare</p>
+          <h2>{props.images.length} images</h2>
+        </div>
+        {stackAvailable ? (
+          <div className="compare-layout-controls" role="group" aria-label="Compare layout">
+            <button
+              type="button"
+              className={`icon-only ${activeLayout === 'horizontal' ? 'active' : ''}`}
+              title="Left right layout"
+              aria-label="Left right layout"
+              onClick={() => props.onLayoutChange('horizontal')}
+            >
+              <Columns2 size={18} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={`icon-only ${activeLayout === 'vertical' ? 'active' : ''}`}
+              title="Top bottom layout"
+              aria-label="Top bottom layout"
+              onClick={() => props.onLayoutChange('vertical')}
+            >
+              <Rows2 size={18} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={`icon-only ${activeLayout === 'stack' ? 'active' : ''}`}
+              title="Stack compare"
+              aria-label="Stack compare"
+              onClick={() => props.onLayoutChange('stack')}
+            >
+              <SquareStack size={18} aria-hidden="true" />
+            </button>
+            {gridAvailable ? (
+              <button
+                type="button"
+                className={`icon-only ${activeLayout === 'grid' ? 'active' : ''}`}
+                title="Grid layout"
+                aria-label="Grid layout"
+                onClick={() => props.onLayoutChange('grid')}
+              >
+                <LayoutGrid size={18} aria-hidden="true" />
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <div aria-hidden="true" />
+        )}
+        <div className="compare-actions">
+          <button
+            type="button"
+            className="text-button"
+            title="Clear compare"
+            onClick={props.onClear}
+          >
+            <X size={17} aria-hidden="true" />
+            Clear
+          </button>
+          <button
+            type="button"
+            className="icon-only"
+            title="Close compare"
+            aria-label="Close compare"
+            onClick={props.onClose}
+          >
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
+      {activeLayout === 'stack' ? (
+        <StackCompareView
+          images={props.images}
+          codexRoot={props.codexRoot}
+          slider={props.slider}
+          stackBasePath={props.stackBasePath}
+          stackOverlayPath={props.stackOverlayPath}
+          onSliderChange={props.onSliderChange}
+          onSetBase={props.onSetStackBase}
+          onSwapPair={props.onSwapStackPair}
+          onRemove={props.onRemove}
+          onFavorite={props.onFavorite}
+          onError={props.onError}
+        />
+      ) : (
+        <div
+          className={`compare-stage compare-stage-${activeLayout}`}
+          data-count={props.images.length}
+          style={countStyle}
+        >
+          {props.images.map((image) => (
+            <CompareImagePanel
+              key={image.path}
+              image={image}
+              codexRoot={props.codexRoot}
+              onRemove={props.onRemove}
+              onFavorite={props.onFavorite}
+              onError={props.onError}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CompareImagePanel(props: {
+  image: ImageInfo
+  codexRoot?: string
+  onRemove: (path: string) => void
+  onFavorite: (image: ImageInfo) => void
+  onError: (message: string) => void
+}) {
+  return (
+    <figure className="compare-panel">
+      <CompareOriginalImage
+        image={props.image}
+        codexRoot={props.codexRoot}
+        onError={props.onError}
+      />
+      <figcaption className="compare-panel-bar">
+        <span title={props.image.filename}>{props.image.filename}</span>
+        <div>
+          <button
+            type="button"
+            className={`icon-only ${props.image.favorited ? 'favorited' : ''}`}
+            title={props.image.favorited ? 'Remove from favorites' : 'Add to favorites'}
+            aria-label={props.image.favorited ? 'Remove from favorites' : 'Add to favorites'}
+            onClick={() => props.onFavorite(props.image)}
+          >
+            <Star
+              size={17}
+              fill={props.image.favorited ? 'currentColor' : 'none'}
+              aria-hidden="true"
+            />
+          </button>
+          <button
+            type="button"
+            className="icon-only"
+            title="Remove from compare"
+            aria-label="Remove from compare"
+            onClick={() => props.onRemove(props.image.path)}
+          >
+            <X size={17} aria-hidden="true" />
+          </button>
+        </div>
+      </figcaption>
+    </figure>
+  )
+}
+
+function CompareOriginalImage(props: {
+  image: ImageInfo
+  codexRoot?: string
+  className?: string
+  onError: (message: string) => void
+}) {
+  const [loadedSrc, setLoadedSrc] = useState<{ path: string; src: string } | null>(null)
+  const imagePath = props.image.path
+  const onError = props.onError
+  const src = loadedSrc?.path === imagePath ? loadedSrc.src : ''
+
+  useEffect(() => {
+    let cancelled = false
+    void readImageDataUrl(imagePath, props.codexRoot)
+      .then(async (dataUrl) => {
+        await decodeImage(dataUrl)
+        if (!cancelled && dataUrl) {
+          setLoadedSrc({ path: imagePath, src: dataUrl })
+        }
+      })
+      .catch((loadError) => {
+        if (!cancelled) {
+          onError(`Could not load compare image: ${errorMessage(loadError)}`)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [imagePath, onError, props.codexRoot])
+
+  return (
+    <div className={`compare-image-shell ${props.className ?? ''}`}>
+      <ThumbnailImage
+        key={props.image.thumbnailKey}
+        image={props.image}
+        alt={props.image.filename}
+        className={`compare-image compare-fallback ${src ? 'hidden' : ''}`}
+        codexRoot={props.codexRoot}
+        eager
+      />
+      {src ? (
+        <img className="compare-image compare-original" src={src} alt={props.image.filename} />
+      ) : null}
+    </div>
+  )
+}
+
+function StackCompareView(props: {
+  images: ImageInfo[]
+  codexRoot?: string
+  slider: number
+  stackBasePath: string | null
+  stackOverlayPath: string | null
+  onSliderChange: (value: number) => void
+  onSetBase: (path: string) => void
+  onSwapPair: (basePath: string, overlayPath: string) => void
+  onRemove: (path: string) => void
+  onFavorite: (image: ImageInfo) => void
+  onError: (message: string) => void
+}) {
+  const stackPair = stackPairImages(
+    props.images,
+    props.stackBasePath,
+    props.stackOverlayPath,
+  )
+  const baseImage = stackPair?.baseImage
+  const overlayImage = stackPair?.overlayImage
+  const stackPairKey = baseImage && overlayImage ? `${baseImage.path}\n${overlayImage.path}` : ''
+  const canvasRef = useRef<HTMLDivElement | null>(null)
+  const [imageBoundsState, setImageBoundsState] = useState<StackImageBoundsState | null>(null)
+  const imageBounds =
+    imageBoundsState?.pairKey === stackPairKey ? imageBoundsState.bounds : null
+  const splitStyle = stackSplitStyle(imageBounds, props.slider)
+
+  useEffect(() => {
+    if (!baseImage || !overlayImage) {
+      return
+    }
+
+    const element = canvasRef.current
+    if (!element) {
+      return
+    }
+
+    let frame = 0
+    const scheduleMeasure = () => {
+      window.cancelAnimationFrame(frame)
+      frame = window.requestAnimationFrame(() => {
+        const rect = element.getBoundingClientRect()
+        if (rect.width > 0 && rect.height > 0) {
+          setImageBoundsState({
+            pairKey: stackPairKey,
+            bounds: stackComparisonBounds(rect, baseImage, overlayImage),
+          })
+        }
+      })
+    }
+
+    scheduleMeasure()
+    const observer = new ResizeObserver(scheduleMeasure)
+    observer.observe(element)
+
+    return () => {
+      window.cancelAnimationFrame(frame)
+      observer.disconnect()
+    }
+  }, [baseImage, overlayImage, stackPairKey])
+
+  function updateSlider(event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault()
+    if (!baseImage || !overlayImage) {
+      return
+    }
+    const rect = event.currentTarget.getBoundingClientRect()
+    const bounds = imageBounds ?? stackComparisonBounds(rect, baseImage, overlayImage)
+    const next = ((event.clientX - rect.left - bounds.left) / bounds.width) * 100
+    props.onSliderChange(Math.max(0, Math.min(100, Math.round(next))))
+  }
+
+  if (!baseImage || !overlayImage) {
+    return null
+  }
+
+  function startDrag(event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    updateSlider(event)
+  }
+
+  function moveDrag(event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault()
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      updateSlider(event)
+    }
+  }
+
+  function endDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  return (
+    <div className="stack-compare-view">
+      <div
+        ref={canvasRef}
+        className="stack-compare-canvas"
+        style={splitStyle}
+        onPointerDown={startDrag}
+        onPointerMove={moveDrag}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+      >
+        <CompareOriginalImage
+          image={baseImage}
+          codexRoot={props.codexRoot}
+          className="stack-base-image"
+          onError={props.onError}
+        />
+        <div className="stack-overlay-image" aria-hidden="true">
+          <CompareOriginalImage
+            image={overlayImage}
+            codexRoot={props.codexRoot}
+            onError={props.onError}
+          />
+        </div>
+        <div className="compare-split-line" aria-hidden="true">
+          <span />
+        </div>
+      </div>
+      <div className="stack-reference-strip">
+        {props.images.map((image) => {
+          const role = stackLayerRole(image, baseImage, overlayImage)
+          const active = role === 'base' || role === 'overlay'
+
+          return (
+            <div className={`stack-reference-card ${role}-layer`} key={image.path}>
+              <div className="stack-reference-thumb">
+                <ThumbnailImage image={image} alt="" codexRoot={props.codexRoot} eager />
+                <em>{stackLayerLabel(role)}</em>
+                <button
+                  type="button"
+                  className="stack-reference-layer-action"
+                  title={active ? 'Swap base and overlay' : 'Set as base image'}
+                  aria-label={
+                    active ? 'Swap base and overlay' : `Set ${image.filename} as base image`
+                  }
+                  onClick={() => {
+                    if (active) {
+                      props.onSwapPair(baseImage.path, overlayImage.path)
+                    } else {
+                      props.onSetBase(image.path)
+                    }
+                  }}
+                >
+                  {active ? (
+                    <ArrowLeftRight size={16} aria-hidden="true" />
+                  ) : (
+                    <ArrowUp size={16} aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+              <span className="stack-reference-name" title={image.filename}>
+                {image.filename}
+              </span>
+              <button
+                type="button"
+                className={`icon-only ${image.favorited ? 'favorited' : ''}`}
+                title={image.favorited ? 'Remove from favorites' : 'Add to favorites'}
+                aria-label={image.favorited ? 'Remove from favorites' : 'Add to favorites'}
+                onClick={() => props.onFavorite(image)}
+              >
+                <Star size={16} fill={image.favorited ? 'currentColor' : 'none'} />
+              </button>
+              <button
+                type="button"
+                className="icon-only"
+                title="Remove from compare"
+                aria-label="Remove from compare"
+                onClick={() => props.onRemove(image.path)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function stackComparisonBounds(
+  rect: DOMRect,
+  baseImage: ImageInfo,
+  overlayImage: ImageInfo,
+): StackImageBounds {
+  const baseBounds = containedImageBounds(rect, baseImage)
+  const overlayBounds = containedImageBounds(rect, overlayImage)
+  const left = Math.min(
+    Math.max(baseBounds.left, overlayBounds.left),
+    Math.max(0, rect.width - 1),
+  )
+  const top = Math.min(
+    Math.max(baseBounds.top, overlayBounds.top),
+    Math.max(0, rect.height - 1),
+  )
+  const rightEdge = Math.max(
+    left + 1,
+    Math.min(rect.width - baseBounds.right, rect.width - overlayBounds.right, rect.width),
+  )
+  const bottomEdge = Math.max(
+    top + 1,
+    Math.min(rect.height - baseBounds.bottom, rect.height - overlayBounds.bottom, rect.height),
+  )
+  const width = Math.max(1, Math.min(rect.width - left, rightEdge - left))
+  const height = Math.max(1, Math.min(rect.height - top, bottomEdge - top))
+
+  return {
+    left,
+    top,
+    width,
+    height,
+    right: Math.max(0, rect.width - left - width),
+    bottom: Math.max(0, rect.height - top - height),
+  }
+}
+
+function containedImageBounds(rect: DOMRect, image: ImageInfo): StackImageBounds {
+  const fallbackAspect = rect.width > 0 && rect.height > 0 ? rect.width / rect.height : 1
+  const imageAspect =
+    image.width && image.height && image.width > 0 && image.height > 0
+      ? image.width / image.height
+      : fallbackAspect
+  const containerAspect = fallbackAspect
+
+  let width = rect.width
+  let height = rect.height
+  let left = 0
+  let top = 0
+
+  if (imageAspect > containerAspect) {
+    height = width / imageAspect
+    top = (rect.height - height) / 2
+  } else {
+    width = height * imageAspect
+    left = (rect.width - width) / 2
+  }
+
+  left = Math.max(0, left)
+  top = Math.max(0, top)
+  width = Math.max(1, Math.min(width, rect.width))
+  height = Math.max(1, Math.min(height, rect.height))
+
+  return {
+    left,
+    top,
+    width,
+    height,
+    right: Math.max(0, rect.width - left - width),
+    bottom: Math.max(0, rect.height - top - height),
+  }
+}
+
+function stackSplitStyle(bounds: StackImageBounds | null, slider: number) {
+  if (!bounds) {
+    return {
+      '--split-x': `${slider}%`,
+      '--image-top': '0px',
+      '--image-right-inset': '0px',
+      '--image-bottom-inset': '0px',
+    } as React.CSSProperties
+  }
+
+  const splitX = bounds.left + (bounds.width * slider) / 100
+  return {
+    '--split-x': `${splitX}px`,
+    '--image-top': `${bounds.top}px`,
+    '--image-right-inset': `${bounds.right}px`,
+    '--image-bottom-inset': `${bounds.bottom}px`,
+  } as React.CSSProperties
+}
+
+type StackLayerRole = 'base' | 'overlay' | 'candidate'
+
+function stackPairImages(
+  images: ImageInfo[],
+  basePath: string | null,
+  overlayPath: string | null,
+): { baseImage: ImageInfo; overlayImage: ImageInfo } | null {
+  const fallbackBaseImage = images[0]
+  if (!fallbackBaseImage) {
+    return null
+  }
+
+  const baseImage = images.find((image) => image.path === basePath) ?? fallbackBaseImage
+  const overlayImage =
+    images.find((image) => image.path === overlayPath && image.path !== baseImage.path) ??
+    images.find((image) => image.path !== baseImage.path)
+  if (!overlayImage) {
+    return null
+  }
+
+  return { baseImage, overlayImage }
+}
+
+function stackLayerRole(
+  image: ImageInfo,
+  baseImage: ImageInfo,
+  overlayImage: ImageInfo,
+): StackLayerRole {
+  if (image.path === baseImage.path) {
+    return 'base'
+  }
+  if (image.path === overlayImage.path) {
+    return 'overlay'
+  }
+  return 'candidate'
+}
+
+function stackLayerLabel(role: StackLayerRole) {
+  if (role === 'base') {
+    return 'Base'
+  }
+  if (role === 'overlay') {
+    return 'Overlay'
+  }
+  return 'Candidate'
 }
 
 function PreviewModal(props: {
