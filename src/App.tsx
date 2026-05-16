@@ -29,7 +29,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   addImageTag,
   deleteTag,
@@ -50,6 +50,9 @@ import './App.css'
 const galleryZoomSizes = [92, 132, 180, 238]
 const sessionZoomSizes = [180, 238, 300, 360]
 const maxCompareImages = 4
+const zoomAnimationDurationMs = 170
+const zoomWheelStepDelta = 90
+const zoomWheelResetDelayMs = 140
 
 type CompareLayout = 'grid' | 'horizontal' | 'vertical' | 'stack'
 
@@ -120,6 +123,19 @@ function comparePathListsEqual(first: string[], second: string[]) {
   return first.length === second.length && first.every((path, index) => path === second[index])
 }
 
+function clampZoomLevel(level: number, sizes: number[]) {
+  return Math.min(sizes.length - 1, Math.max(0, level))
+}
+
+function easeOutCubic(progress: number) {
+  return 1 - Math.pow(1 - progress, 3)
+}
+
+function normalizeWheelDelta(event: WheelEvent) {
+  const deltaModeScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1
+  return event.deltaY * deltaModeScale
+}
+
 function reconcileCompareState(
   current: CompareState,
   paths: string[],
@@ -166,7 +182,10 @@ function App() {
   const [compareSlider, setCompareSlider] = useState(50)
   const [tagMutationCount, setTagMutationCount] = useState(0)
   const [toast, setToast] = useState('')
+  const workspaceRef = useRef<HTMLElement | null>(null)
   const loadRequestId = useRef(0)
+  const zoomWheelDelta = useRef(0)
+  const zoomWheelResetTimer = useRef<number | null>(null)
   const comparePaths = compareState.paths
   const stackPairPaths = compareState.stackPair
   const compareOpen = compareState.open
@@ -348,6 +367,64 @@ function App() {
   const stats = useMemo(() => buildStats(gallery), [gallery])
   const imageActionsAvailable = !(view === 'tags' && !selectedTag)
   const tagOperationPending = tagMutationCount > 0
+
+  useEffect(() => {
+    return () => {
+      if (zoomWheelResetTimer.current !== null) {
+        window.clearTimeout(zoomWheelResetTimer.current)
+      }
+    }
+  }, [])
+
+  const changeZoomLevel = useCallback(
+    (delta: number) => {
+      setZoomLevel((current) => clampZoomLevel(current + delta, activeZoomSizes))
+    },
+    [activeZoomSizes],
+  )
+
+  const handleWheel = useCallback(
+    (event: WheelEvent) => {
+      if (!event.ctrlKey) {
+        return
+      }
+      event.preventDefault()
+
+      if (zoomWheelResetTimer.current !== null) {
+        window.clearTimeout(zoomWheelResetTimer.current)
+      }
+      zoomWheelResetTimer.current = window.setTimeout(() => {
+        zoomWheelDelta.current = 0
+        zoomWheelResetTimer.current = null
+      }, zoomWheelResetDelayMs)
+
+      const wheelDelta = normalizeWheelDelta(event)
+      if (wheelDelta === 0) {
+        return
+      }
+      zoomWheelDelta.current += wheelDelta
+      if (Math.abs(zoomWheelDelta.current) < zoomWheelStepDelta) {
+        return
+      }
+
+      changeZoomLevel(zoomWheelDelta.current > 0 ? -1 : 1)
+      zoomWheelDelta.current = 0
+    },
+    [changeZoomLevel],
+  )
+
+  useEffect(() => {
+    const workspace = workspaceRef.current
+    if (!workspace) {
+      return
+    }
+
+    workspace.addEventListener('wheel', handleWheel, { capture: true, passive: false })
+
+    return () => {
+      workspace.removeEventListener('wheel', handleWheel, { capture: true })
+    }
+  }, [handleWheel])
 
   function beginTagMutation() {
     setTagMutationCount((current) => current + 1)
@@ -601,19 +678,6 @@ function App() {
     }
   }
 
-  function handleWheel(event: React.WheelEvent<HTMLElement>) {
-    if (!event.ctrlKey) {
-      return
-    }
-    event.preventDefault()
-    setZoomLevel((current) => {
-      if (event.deltaY > 0) {
-        return Math.max(0, current - 1)
-      }
-        return Math.min(activeZoomSizes.length - 1, current + 1)
-      })
-    }
-
   const selectedExportPaths = Array.from(selectedPaths)
   const canZoomOut = zoomLevel > 0
   const canZoomIn = zoomLevel < activeZoomSizes.length - 1
@@ -674,7 +738,7 @@ function App() {
         />
       </aside>
 
-      <main className="workspace" onWheel={handleWheel}>
+      <main ref={workspaceRef} className="workspace">
         <header className="topbar">
           <div className="topbar-title">
             <p className="eyebrow">{viewLabel(view, selectedSession, selectedTag)}</p>
@@ -702,7 +766,7 @@ function App() {
                   title="Smaller thumbnails"
                   aria-label="Smaller thumbnails"
                   disabled={!canZoomOut}
-                  onClick={() => setZoomLevel((current) => Math.max(0, current - 1))}
+                  onClick={() => changeZoomLevel(-1)}
                 >
                   <ZoomOut size={17} aria-hidden="true" />
                 </button>
@@ -712,9 +776,7 @@ function App() {
                   title="Larger thumbnails"
                   aria-label="Larger thumbnails"
                   disabled={!canZoomIn}
-                  onClick={() =>
-                    setZoomLevel((current) => Math.min(activeZoomSizes.length - 1, current + 1))
-                  }
+                  onClick={() => changeZoomLevel(1)}
                 >
                   <ZoomIn size={17} aria-hidden="true" />
                 </button>
@@ -1315,11 +1377,62 @@ function ImageGrid(props: {
   onToggleCompare: (image: ImageInfo) => void
   onToggleSelected: (path: string) => void
 }) {
+  const gridRef = useRef<HTMLDivElement | null>(null)
+  const currentTileSizeRef = useRef(props.tileSize)
+  const tileAnimationFrame = useRef<number | null>(null)
+
+  useLayoutEffect(() => {
+    const grid = gridRef.current
+    if (!grid) {
+      currentTileSizeRef.current = props.tileSize
+      return
+    }
+    const gridElement = grid
+
+    const startSize = currentTileSizeRef.current
+    const sizeDelta = props.tileSize - startSize
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+    if (tileAnimationFrame.current !== null) {
+      window.cancelAnimationFrame(tileAnimationFrame.current)
+      tileAnimationFrame.current = null
+    }
+
+    if (prefersReducedMotion || Math.abs(sizeDelta) < 0.5) {
+      currentTileSizeRef.current = props.tileSize
+      gridElement.style.setProperty('--tile-size', `${props.tileSize}px`)
+      return
+    }
+
+    const startedAt = performance.now()
+
+    function animateTileSizeFrame(now: number) {
+      const progress = Math.min(1, (now - startedAt) / zoomAnimationDurationMs)
+      const nextSize = startSize + sizeDelta * easeOutCubic(progress)
+      currentTileSizeRef.current = nextSize
+      gridElement.style.setProperty('--tile-size', `${nextSize}px`)
+
+      if (progress < 1) {
+        tileAnimationFrame.current = window.requestAnimationFrame(animateTileSizeFrame)
+      } else {
+        tileAnimationFrame.current = null
+        currentTileSizeRef.current = props.tileSize
+        gridElement.style.setProperty('--tile-size', `${props.tileSize}px`)
+      }
+    }
+
+    tileAnimationFrame.current = window.requestAnimationFrame(animateTileSizeFrame)
+
+    return () => {
+      if (tileAnimationFrame.current !== null) {
+        window.cancelAnimationFrame(tileAnimationFrame.current)
+        tileAnimationFrame.current = null
+      }
+    }
+  }, [props.tileSize])
+
   return (
-    <div
-      className="image-grid"
-      style={{ '--tile-size': `${props.tileSize}px` } as React.CSSProperties}
-    >
+    <div ref={gridRef} className="image-grid">
       {props.images.map((image) => (
         <ImageTile key={image.path} image={image} {...props} />
       ))}
