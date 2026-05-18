@@ -1,7 +1,7 @@
 {
   "name": "codex-gallery",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "packageManager": "pnpm@10.33.0",
   "license": "MIT",
   "author": "Yidoon",
@@ -20,6 +20,9 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "icons": "node scripts/generate-icons.mjs",
+    "release:check": "node scripts/release-version.mjs check",
+    "release:bump": "node scripts/release-version.mjs bump",
+    "release:tag": "node scripts/release-version.mjs tag",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build --bundles app",

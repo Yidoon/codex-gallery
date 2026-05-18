@@ -37,32 +37,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Validate release version
-        run: |
-          set -euo pipefail
-
-          release_tag="${GITHUB_REF_NAME}"
-          tag_version="${release_tag#v}"
-          package_version="$(node -p "require('./package.json').version")"
-          tauri_version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
-          cargo_version="$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)"
-
-          if ! echo "${release_tag}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
-            echo "Release tag must look like v1.0.0."
-            exit 1
-          fi
-
-          echo "Release tag:     ${release_tag}"
-          echo "Tag version:     ${tag_version}"
-          echo "package.json:    ${package_version}"
-          echo "tauri.conf.json: ${tauri_version}"
-          echo "Cargo.toml:      ${cargo_version}"
-
-          if [ "${package_version}" != "${tag_version}" ] || \
-             [ "${tauri_version}" != "${tag_version}" ] || \
-             [ "${cargo_version}" != "${tag_version}" ]; then
-            echo "Release tag must match package.json, src-tauri/tauri.conf.json, and src-tauri/Cargo.toml versions."
-            exit 1
-          fi
+        run: pnpm release:check -- "${GITHUB_REF_NAME}"
 
       - name: Lint frontend
         run: pnpm lint

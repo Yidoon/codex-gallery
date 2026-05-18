@@ -168,18 +168,17 @@ DMG の作成は、ローカルの macOS パッケージング環境、コード
 
 GitHub Actions はバージョン tag が push されたときだけ macOS DMG Release をビルドします。`main` ブランチへの通常の push では Release は公開されません。
 
-Release tag を作成する前に、次のバージョンが一致していることを確認してください。
-
-- `package.json`
-- `src-tauri/tauri.conf.json`
-- `src-tauri/Cargo.toml`
-
-バージョン tag を作成して push します。
+release helper を使うと、`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、tag のバージョンを同期できます。
 
 ```sh
-git tag v1.0.0
-git push origin v1.0.0
+pnpm release:bump -- patch
+git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+git commit -m "Release v1.0.1"
+pnpm release:tag
+git push origin main --follow-tags
 ```
+
+明示的なバージョンを指定する場合は `pnpm release:bump -- 1.0.1` を使います。`pnpm release:tag` は、working tree が dirty な場合や tag がすでに存在する場合には tag を作成しません。
 
 workflow はフロントエンドと Rust バックエンドを検証したあと、Apple Silicon と Intel 用の macOS DMG を GitHub Release にアップロードします。現在のビルドはまだ notarization されていないため、macOS で unidentified developer の警告が表示される場合があります。
 
