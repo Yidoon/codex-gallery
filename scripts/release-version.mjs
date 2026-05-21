@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 const packagePath = 'package.json'
 const tauriConfigPath = 'src-tauri/tauri.conf.json'
 const cargoTomlPath = 'src-tauri/Cargo.toml'
+const cargoLockPath = 'src-tauri/Cargo.lock'
 const semverPattern = /^[0-9]+\.[0-9]+\.[0-9]+(?:[.-][0-9A-Za-z.-]+)?$/
 
 const [command = 'check', value] = process.argv.slice(2).filter((arg) => arg !== '--')
@@ -12,16 +13,24 @@ function readVersions() {
   const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'))
   const tauriConfig = JSON.parse(readFileSync(tauriConfigPath, 'utf8'))
   const cargoToml = readFileSync(cargoTomlPath, 'utf8')
+  const cargoLock = readFileSync(cargoLockPath, 'utf8')
   const cargoVersion = cargoToml.match(/^version = "([^"]+)"/m)?.[1]
+  const cargoLockVersion = cargoLock.match(
+    /\[\[package\]\]\nname = "codex-gallery"\nversion = "([^"]+)"/,
+  )?.[1]
 
   if (!cargoVersion) {
     throw new Error(`Could not read package version from ${cargoTomlPath}`)
+  }
+  if (!cargoLockVersion) {
+    throw new Error(`Could not read package version from ${cargoLockPath}`)
   }
 
   return {
     packageVersion: packageJson.version,
     tauriVersion: tauriConfig.version,
     cargoVersion,
+    cargoLockVersion,
   }
 }
 
@@ -36,6 +45,7 @@ function printVersions(tag) {
   console.log(`package.json:    ${versions.packageVersion}`)
   console.log(`tauri.conf.json: ${versions.tauriVersion}`)
   console.log(`Cargo.toml:      ${versions.cargoVersion}`)
+  console.log(`Cargo.lock:      ${versions.cargoLockVersion}`)
 
   return { ...versions, tagVersion }
 }
@@ -58,10 +68,11 @@ function assertVersionsMatch(tag) {
   if (
     versions.packageVersion !== expectedVersion ||
     versions.tauriVersion !== expectedVersion ||
-    versions.cargoVersion !== expectedVersion
+    versions.cargoVersion !== expectedVersion ||
+    versions.cargoLockVersion !== expectedVersion
   ) {
     throw new Error(
-      'Release tag must match package.json, src-tauri/tauri.conf.json, and src-tauri/Cargo.toml versions.',
+      'Release tag must match package.json, src-tauri/tauri.conf.json, src-tauri/Cargo.toml, and src-tauri/Cargo.lock versions.',
     )
   }
 }
@@ -102,6 +113,15 @@ function writeVersion(version) {
 
   const cargoToml = readFileSync(cargoTomlPath, 'utf8')
   writeFileSync(cargoTomlPath, cargoToml.replace(/^version = "([^"]+)"/m, `version = "${version}"`))
+
+  const cargoLock = readFileSync(cargoLockPath, 'utf8')
+  writeFileSync(
+    cargoLockPath,
+    cargoLock.replace(
+      /(\[\[package\]\]\nname = "codex-gallery"\nversion = ")[^"]+(")/,
+      `$1${version}$2`,
+    ),
+  )
 }
 
 function git(args) {

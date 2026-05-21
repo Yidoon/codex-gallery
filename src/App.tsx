@@ -1201,11 +1201,7 @@ function TagManagementPage(props: {
   }
 
   return (
-    <div className="tag-page">
-      <div className="tag-page-header">
-        <h2>Tags</h2>
-        <span>{props.tags.length} total</span>
-      </div>
+    <div className="tag-page" aria-label={`${props.tags.length} tags`}>
       <div className="tag-management-list">
         {props.tags.map((tag) => (
           <TagManagementRow

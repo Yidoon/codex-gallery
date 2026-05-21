@@ -732,24 +732,6 @@
   max-width: 1180px;
 }
 
-.tag-page-header {
-  margin-bottom: 14px;
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 14px;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 12px;
-}
-
-.tag-page-header h2 {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: 20px;
-  font-weight: 650;
-}
-
-.tag-page-header span,
 .tag-row-count {
   color: var(--text-muted);
   font-size: 12px;

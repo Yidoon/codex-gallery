@@ -1,6 +1,6 @@
 [package]
 name = "codex-gallery"
-version = "1.0.1"
+version = "1.0.2"
 description = "A local timeline gallery for Codex-generated images."
 authors = ["yidoon"]
 license = "MIT"

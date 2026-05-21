@@ -2,7 +2,7 @@
 
 言語: [English](./README.md) | [简体中文](./README.zh-CN.md) | 日本語
 
-Codex Gallery は、Codex が生成した画像を閲覧するためのローカルファーストなデスクトップギャラリーです。ローカルの Codex データディレクトリをスキャンし、画像を会話ごとに整理し、利用可能な場合はセッションタイトルを表示します。元の Codex ファイルを変更せずに、お気に入り、プレビュー、メタデータ確認、エクスポートができます。
+Codex Gallery は、Codex が生成した画像を閲覧するためのローカルファーストなデスクトップギャラリーです。ローカルの Codex データディレクトリをスキャンし、画像を会話ごとに整理し、利用可能な場合はセッションタイトルを表示します。元の Codex ファイルを変更せずに、お気に入り、タグ付け、比較、プレビュー、メタデータ確認、エクスポートができます。
 
 これは Codex の非公式コンパニオンアプリです。
 
@@ -19,6 +19,8 @@ Codex が生成した画像はローカルに保存されます。
 - Codex が生成したすべての画像を一か所で見づらい。
 - 画像がどの会話から来たものか分かりづらい。
 - 以前生成した画像を見つけて、追加制作に使いづらい。
+- プロンプト違いの生成結果を並べて比較しづらい。
+- 自分のタグで再利用したい画像を整理しづらい。
 - 他のプラットフォームで使うために画像を書き出しづらい。
 
 Codex Gallery は、これらのローカル画像をシンプルな写真ライブラリのように扱えるようにします。
@@ -31,21 +33,21 @@ Codex Gallery は、これらのローカル画像をシンプルな写真ライ
 - **Missing Session**: 元のセッションメタデータがなくても画像を表示。
 - **お気に入り**: Codex Gallery 独自のローカル SQLite データベースに保存。
 - **タグ**: 画像にタグを付け、サイドバーからタグ別に閲覧し、専用のタグ管理画面で名前変更や削除が可能。
+- **サムネイルサイズ調整**: ツールバーボタン、または滑らかな `Control` + マウスホイールでギャラリーサイズを変更。
+- **複数選択**: グリッドから複数の画像を選択し、まとめてエクスポート。
+- **画像比較**: 最大 4 枚を比較トレイに集め、グリッド、横並び、縦並び、重ね合わせ分割ビューで確認。
 - **大きなプレビュー**: 画像を中央に大きく表示し、前後の画像に移動可能。
 - **メタデータ**: ファイル名、サイズ、形式、パス、セッション id、プロジェクトディレクトリ、更新日時などを確認。
-- **エクスポート**: 選択した画像を元のファイル名のまま Downloads にコピー。元画像は移動しません。
+- **エクスポート**: 単体または選択した画像を元のファイル名のまま Downloads にコピー。元画像は移動しません。
 - **自動更新**: Codex の画像ディレクトリを監視し、新しい画像が追加されたら更新。
 - **遅延サムネイル**: スキャン時は軽量なメタデータだけを返し、サムネイルは必要に応じて読み込み、ローカルにキャッシュ。
 - **空状態**: Codex データ、生成画像、セッションメタデータがない場合に分かりやすく表示。
 
 ## スクリーンショット
 
-スクリーンショットはまだ含まれていません。追加するとよいもの:
+![生成したデモデータを使った Codex Gallery のタイムライン画面](./docs/assets/codex-gallery-screenshot.png)
 
-- Timeline 画面
-- Sessions 画面
-- 大きな画像プレビュー
-- Metadata サイドパネル
+このスクリーンショットは生成したデモデータのみを使用しています。ローカルの Codex 会話タイトル、画像ファイル、チャットメタデータは含まれていません。
 
 ## データソース
 
@@ -135,6 +137,9 @@ pnpm dev              # Vite web shell を起動
 pnpm tauri:dev        # Tauri デスクトップアプリを起動
 pnpm build            # TypeScript チェックとフロントエンドビルド
 pnpm lint             # ESLint を実行
+pnpm release:check    # release tag とアプリバージョンの一致を確認
+pnpm release:bump     # package、Tauri、Cargo.toml、Cargo.lock のバージョンを同期
+pnpm release:tag      # 現在のアプリバージョンから release tag を作成
 pnpm tauri:build      # macOS .app バンドルをビルド
 pnpm tauri:build:dmg  # ローカル環境が対応している場合に DMG をビルド
 pnpm icons            # アプリアイコンを再生成
@@ -168,11 +173,11 @@ DMG の作成は、ローカルの macOS パッケージング環境、コード
 
 GitHub Actions はバージョン tag が push されたときだけ macOS DMG Release をビルドします。`main` ブランチへの通常の push では Release は公開されません。
 
-release helper を使うと、`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、tag のバージョンを同期できます。
+release helper を使うと、`package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、tag のバージョンを同期できます。
 
 ```sh
 pnpm release:bump -- patch
-git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
 git commit -m "Release v1.0.1"
 pnpm release:tag
 git push origin main --follow-tags
@@ -207,7 +212,8 @@ xattr -dr com.apple.quarantine "/Applications/Codex Gallery.app"
 │   ├── src/lib.rs          # スキャン、SQLite 読み取り、watcher、エクスポート、画像コマンド
 │   ├── capabilities/       # Tauri 権限設定
 │   └── tauri.conf.json     # Tauri アプリ設定
-├── scripts/                # ユーティリティスクリプト
+├── scripts/                # ユーティリティスクリプト、release バージョン補助
+├── docs/                   # README スクリーンショットとドキュメントアセット
 └── public/                 # 静的アセット
 ```
 
@@ -226,18 +232,18 @@ Codex Gallery は 2 種類のローカルデータを組み合わせます。
 - デフォルトの Codex データディレクトリは `~/.codex` 固定です。
 - エクスポート先は現在 Downloads がデフォルトです。
 - エクスポート時のファイル名は現在、元のファイル名を保持します。
-- 正式な release pipeline はまだありません。
-- スクリーンショットとプロジェクトロゴはまだ追加されていません。
+- Release ビルドはまだ署名も notarization もされていません。
+- プロジェクトロゴはまだ追加されていません。
 
 ## Roadmap
 
 - Codex データディレクトリのカスタマイズ。
 - Windows 対応。
 - より柔軟なエクスポート命名テンプレート。
-- 複数選択操作の改善。
+- エクスポート先のカスタマイズ。
 - サムネイルキャッシュのクリーンアップ。
-- 署名済み release workflow。
-- スキャン、Missing Session、エクスポート挙動のテスト追加。
+- 署名と notarization 済みの Release。
+- スキャン、Missing Session、タグ、比較、エクスポート挙動のテスト追加。
 
 ## コントリビュート
 
